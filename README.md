@@ -1,0 +1,52 @@
+# 🦊 DGP 欲望大賽 Discord Bot
+
+基於 discord.py 的假面騎士 Geats「欲望大賽」Discord 機器人。
+
+## ✨ 功能總覽
+- 完整報名 / 開賽 / 邪魔徒 / BOSS / 結算流程
+- 扣具系統（抽卡、背包、贈送、簡稱別名）
+- **Dual‑On 雙扣具**：左右槽同時裝備，攻擊加成疊加
+- **Jyamato（邪魔徒）帶扣**：半稀有，攻擊+200，PVP 抵擋 80% 傷害
+- 騎士 PVP 內戰 `/battle`
+- 自動任務系統（後台自動結算）
+- 遊戲暫停 / 恢復 / 匯出上一局排名
+- 遊戲管理者（不需參賽即可管理）／主辦方／管理員權限
+
+## 🚀 快速開始
+
+### 1. 安裝依賴
+```bash
+pip install -r requirements.txt
+```
+
+### 2. 設定環境變數（重要！）
+```bash
+export DGP_BOT_TOKEN="你的Discord Bot Token"
+```
+或在本機建立 `.env`：
+```
+DGP_BOT_TOKEN=你的Token
+```
+
+### 3. 設定基本參數（main.py 頂部）
+- `ALLOWED_CHANNEL_ID`：大賽專用頻道 ID
+- `GAME_ADMIN_IDS`：遊戲管理者 Discord 使用者 ID 清單（不需參賽即可使用管理指令）
+
+### 4. 執行
+```bash
+python main.py
+```
+
+## ⚠️ 安全提醒
+**絕對不要把你的 Bot Token 提交到 GitHub。** 本專案已用 `.gitignore` 排除 `.env`，
+請務必用環境變數或 `.env` 存放 Token，不要寫死在 `main.py`。
+
+## 📋 指令一覽
+| 分類 | 指令 |
+|---|---|
+| 玩家入場 | `/entry` `/name_change` `/health` `/rank` |
+| 戰鬥扣具 | `/henshin` `/set_buckle` `/dual_on` `/dual_off` `/buckle_inventory` `/give_buckle` `/gacha` `/fight` `/mission` `/battle` |
+| 主辦方 | `/ready` `/start` `/jyamato` `/end_jyamato` `/boss` `/elim` `/game_stop` `/game_resume` `/export_last_rank` |
+| 查詢 | `/help` `/rule` |
+
+詳細規則請在 Discord 內使用 `/rule` 或 `/help` 查看。

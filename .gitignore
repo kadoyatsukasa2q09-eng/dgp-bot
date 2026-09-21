@@ -1,0 +1,17 @@
+# 環境變數 / 密鑰（絕對不要上傳）
+.env
+*.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# IDE / 系統
+.vscode/
+.idea/
+.DS_Store
