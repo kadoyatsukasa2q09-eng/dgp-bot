@@ -11,12 +11,12 @@ PLAYER_MAX_HP = 1000
 PLAYER_DAMAGE_TAKEN = 50
 HEAL_BY_SET_BUCKLE = 30
 HEAL_REST_PERIOD = 50
-ALLOWED_CHANNEL_ID = 1516742058633728023
+# 大賽頻道 ID：可用環境變數 DGP_ALLOWED_CHANNEL_ID 覆寫（雲端部署用）
+ALLOWED_CHANNEL_ID = int(os.environ.get("DGP_ALLOWED_CHANNEL_ID", "1516742058633728023"))
 
 # 遊戲管理者：填入 Discord 使用者ID（數字），不需要報名入場即可使用全部管理指令
-GAME_ADMIN_IDS = [
-    # 範例：123456789012345678,
-]
+# 可用環境變數 DGP_ADMIN_IDS 覆寫（逗號分隔，雲端部署用）
+GAME_ADMIN_IDS = [int(x) for x in os.environ.get("DGP_ADMIN_IDS", "").split(",") if x.strip()]
 
 # 遊戲全域狀態
 riders = dict()

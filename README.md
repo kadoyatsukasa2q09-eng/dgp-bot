@@ -41,6 +41,22 @@ python main.py
 **絕對不要把你的 Bot Token 提交到 GitHub。** 本專案已用 `.gitignore` 排除 `.env`，
 請務必用環境變數或 `.env` 存放 Token，不要寫死在 `main.py`。
 
+## ☁️ 雲端部署（Railway，24 小時運作）
+1. 到 https://railway.app 用 **GitHub 帳號**登入
+2. **New Project → Deploy from GitHub repo** → 選 `dgp-bot`
+3. 在 **Variables** 新增以下環境變數：
+
+| 變數 | 說明 |
+|---|---|
+| `DGP_BOT_TOKEN` | 你的 Discord Bot Token（必填） |
+| `DGP_ALLOWED_CHANNEL_ID` | 大賽專用頻道 ID（選填，不填用程式內預設值） |
+| `DGP_ADMIN_IDS` | 遊戲管理者 ID，多個用逗號分隔，例如 `111,222`（選填） |
+
+4. Railway 會自動安裝依賴並執行 `python main.py`（由 `Procfile` 指定）
+5. 部署完成後，Discord 內輸入 `/help` 測試
+
+> 💡 之後更新：改完程式 `git push` 到 GitHub，Railway 會自動重新部署。
+
 ## 📋 指令一覽
 | 分類 | 指令 |
 |---|---|
