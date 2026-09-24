@@ -57,6 +57,15 @@ python main.py
 
 > 💡 之後更新：改完程式 `git push` 到 GitHub，Railway 會自動重新部署。
 
+## 🧩 Replit 部署（免費，但會休眠）
+1. 到 https://replit.com 登入
+2. **Create** → **Import from GitHub** → 貼上 `https://github.com/kadoyatsukasa2q09-eng/dgp-bot`
+3. 左側 **Tools → Secrets** 新增 `DGP_BOT_TOKEN`（你的 Bot Token）
+4. 按 **Run** 執行，bot 上線
+5. 開啟上方 Webview 網址（形如 `https://xxxx.repl.co`），複製它
+6. 到 https://uptimerobot.com 建立免費 Monitor，類型 **HTTPS**、網址貼上 `https://xxxx.repl.co`、間隔 5 分鐘 → 建立
+7. 之後 UptimeRobot 每 5 分鐘訪問一次，bot 就不會休眠（免費版 Replit 仍可能限制 CPU，適合一般遊玩）
+
 ## 📋 指令一覽
 | 分類 | 指令 |
 |---|---|
