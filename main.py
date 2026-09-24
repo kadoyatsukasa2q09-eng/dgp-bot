@@ -3,6 +3,8 @@ from discord import app_commands, Embed, Member
 from discord.ext import tasks
 import random
 import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # ======================【全域常數設定】======================
 MAX_PLAYERS = 100
@@ -1074,7 +1076,34 @@ async def elim_command(interaction: discord.Interaction, target_player: Member):
     if len(riders) <= 1 and game_active:
         await auto_final_process()
 
+# ====================== Keep-Alive 網頁伺服器（Replit 免休眠用） ======================
+# Replit 免費版會在沒人訪問時休眠，這個小型網頁伺服器讓 bot 隨時有回應，
+# 配合定時訪問（UptimeRobot 或定期 ping）即可維持 bot 上線。
+class KeepAliveHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write("DGP 欲望大賽 bot 運行中 ✅".encode("utf-8"))
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
+    def log_message(self, format, *args):
+        pass  # 不輸出雜訊到 log
+
+
+def start_keep_alive():
+    port = int(os.environ.get("PORT", "8000"))
+    server = HTTPServer(("0.0.0.0", port), KeepAliveHandler)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    print(f"🌐 Keep-Alive 網頁伺服器已啟動｜port {port}")
+
+
 # ====================== 啟動Bot ======================
 if __name__ == "__main__":
+    start_keep_alive()
     TOKEN = os.environ.get("DGP_BOT_TOKEN", "填入你的Bot Token")
     bot.run(TOKEN)
