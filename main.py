@@ -37,6 +37,10 @@ BOSS_DAMAGE = 100
 last_fight_boss_user = ""
 last_game_ranking = []
 
+# 組隊機制：teams[隊名] = {"name":隊名, "leader":使用者ID, "members":[使用者ID...], "team_points":隊伍總積分, "created":建立時間}
+teams = dict()
+TEAM_SHARE_RATE = 0.1  # 隊員透過戰鬥獲得積分時，有 10% 貢獻給隊伍總積分
+
 # 邪魔徒資料
 normal_jyamato = [
     {"name": "小型邪魔徒", "point": 50},
@@ -123,6 +127,7 @@ def heal_player_rest(player):
 async def check_player_death(user_id: str, guild: discord.Guild):
     if user_id in riders and riders[user_id]["hp"] <= 0:
         p_data = riders.pop(user_id)
+        remove_player_from_team(user_id)
         member = guild.get_member(int(user_id))
         if member:
             part_role = discord.utils.get(guild.roles, name=ROLE_PARTICIPANT)
@@ -182,6 +187,40 @@ def get_buckle_is_rare_def(buckle_name: str) -> bool:
 def get_buckle_has_jyamato_shield(buckle_name: str) -> bool:
     return buckle_name.lower() == "jyamato"
 
+# ======================【組隊工具函數】======================
+def find_team_of_user(user_id: str):
+    """回傳該玩家所在的隊伍 dict；若無則回傳 None"""
+    for t in teams.values():
+        if user_id in t["members"]:
+            return t
+    return None
+
+def get_team_by_name(team_name: str):
+    key = team_name.strip().lower()
+    for name, t in teams.items():
+        if name.lower() == key:
+            return name, t
+    return None, None
+
+def remove_player_from_team(user_id: str):
+    """把玩家移出隊伍；若為隊長則自動轉移隊長給隊員；若隊伍空則解散"""
+    for name, t in list(teams.items()):
+        if user_id in t["members"]:
+            t["members"].remove(user_id)
+            if len(t["members"]) == 0:
+                del teams[name]
+                return name
+            if t["leader"] == user_id:
+                t["leader"] = t["members"][0]
+            return name
+    return None
+
+def share_team_points(user_id: str, gained: int):
+    """隊員透過戰鬥獲得積分時，將一定比例累計進隊伍總積分"""
+    t = find_team_of_user(user_id)
+    if t:
+        t["team_points"] = t.get("team_points", 0) + int(gained * TEAM_SHARE_RATE)
+
 # ======================【大賽結算邏輯】======================
 async def auto_final_process():
     global game_active, sign_up_open, boss_active, rest_period
@@ -238,6 +277,7 @@ async def auto_final_process():
                 pass
     riders.clear()
     waiting_info.clear()
+    teams.clear()
 
 @tasks.loop(seconds=AUTO_ELIMINATE_INTERVAL)
 async def auto_eliminate():
@@ -315,6 +355,21 @@ async def help_command(interaction: discord.Interaction):
         inline=False
     )
     embed.add_field(
+        name="🤝 玩家｜組隊機制",
+        value="""
+`/team_create [隊名]` — 創建隊伍(成為隊長)
+`/team_join @隊長` — 加入隊長的隊伍
+`/team_leave` — 退出隊伍
+`/team_info` — 查看自己隊伍資訊
+`/team_list` — 列出全場所有隊伍
+`/team_rank` — 隊伍總積分排行榜
+`/team_kick @隊員` — 【隊長】踢出成員
+`/team_transfer @隊員` — 【隊長】轉移隊長職位
+`/team_disband` — 【隊長】解散隊伍
+""",
+        inline=False
+    )
+    embed.add_field(
         name="📌 扣具簡稱可用清單",
         value="""
 `p_builder` → powered builder
@@ -336,6 +391,7 @@ async def help_command(interaction: discord.Interaction):
 • 稀有扣具：反擊傷害僅承受1/4，擁有攻擊加成
 • 已關閉自動淘汰；僅手動/血量歸零淘汰
 • PVP內戰血量歸零會直接淘汰選手
+• 組隊：同隊視為同盟禁止PVP；隊員戰鬥所得積分10%自動累計進隊伍總分
 """,
         inline=False
     )
@@ -690,6 +746,7 @@ async def fight_command(interaction: discord.Interaction):
             for pl in riders.values():
                 heal_player_rest(pl)
             p["points"] += 500
+            share_team_points(user_id, 500)
             if p.get("active_mission") and p["active_mission"]["type"] == "kill":
                 p["active_mission"]["current"] += 1
             embed = Embed(title="💥 擊碎核心！BOSS 邪魔徒 被成功擊敗！", color=0xff8800)
@@ -716,6 +773,7 @@ async def fight_command(interaction: discord.Interaction):
         simulated_dmg = 100 + atk_bonus
         if win:
             p["points"] += enemy["point"]
+            share_team_points(user_id, enemy["point"])
             if is_counter:
                 p["hp"] -= take_dmg
             if p.get("active_mission"):
@@ -818,6 +876,15 @@ async def battle_command(interaction: discord.Interaction, target: Member):
         return await interaction.response.send_message("❌ 你必須先 /henshin /set_buckle /dual_on 變身才能戰鬥！", ephemeral=True)
     if not defender["isHenshin"]:
         return await interaction.response.send_message("❌ 對手尚未變身，無法開戰！", ephemeral=True)
+
+    # 組隊機制：同一隊伍視為同盟，禁止內戰
+    at = find_team_of_user(attacker_id)
+    dt = find_team_of_user(defender_id)
+    if at and dt and at is dt:
+        return await interaction.response.send_message(
+            f"🛡️ 同盟保護！你們同屬【{at['name']}】隊伍，隊員之間禁止內戰！",
+            ephemeral=True
+        )
 
     base_atk = 120
     if attacker["dual_on"]:
@@ -953,6 +1020,7 @@ async def ready_command(interaction: discord.Interaction):
     last_fight_boss_user = ""
     riders.clear()
     waiting_info.clear()
+    teams.clear()
     await bot.change_presence(activity=discord.Game(name="DGP 報名開放中，使用 /entry"))
     embed = Embed(title="📢 DGP 欲望大賽｜參賽報名通道正式開啟！", color=0x2ecc71)
     embed.description = "請各位有意願改寫世界的準假面騎士們，使用斜線指令 `/entry` 登記姓名與願望！\n當主辦方準備就緒，將以 `/start` 封鎖通道並鳴槍開戰！"
@@ -1063,6 +1131,7 @@ async def elim_command(interaction: discord.Interaction, target_player: Member):
     if target_id not in riders:
         return await interaction.response.send_message("⚠️ 該使用者並非參賽選手！", ephemeral=True)
     target_data = riders.pop(target_id)
+    remove_player_from_team(target_id)
     part_role = discord.utils.get(interaction.guild.roles, name=ROLE_PARTICIPANT)
     if part_role:
         try:
@@ -1075,6 +1144,204 @@ async def elim_command(interaction: discord.Interaction, target_player: Member):
     await send_global_embed(embed)
     if len(riders) <= 1 and game_active:
         await auto_final_process()
+
+# ======================【模組4：組隊機制】======================
+# 規則：同隊視為同盟，禁止PVP內戰；隊員戰鬥所得積分10%自動累計進隊伍總分；
+#       每位玩家只能加入一個隊伍；淘汰時自動離隊；新一輪/ready重置所有隊伍。
+
+def _require_player(interaction: discord.Interaction):
+    """組隊指令通用的玩家資格檢查，回傳 (player, err_msg)"""
+    user_id = str(interaction.user.id)
+    if not game_active:
+        return None, "❌ 遊戲尚未開始！"
+    if user_id not in riders:
+        return None, "❌ 你並非本屆參賽選手！"
+    return riders[user_id], None
+
+@bot.tree.command(name="team_create", description="創建自己的隊伍，成為隊長")
+@app_commands.describe(team_name="你的隊伍名稱")
+@check_is_dgp_channel()
+async def team_create_command(interaction: discord.Interaction, team_name: str):
+    p, err = _require_player(interaction)
+    if err:
+        return await interaction.response.send_message(err, ephemeral=True)
+    user_id = str(interaction.user.id)
+    if find_team_of_user(user_id):
+        return await interaction.response.send_message("❌ 你已經在某個隊伍中了，請先 `/team_leave` 退出！", ephemeral=True)
+    name, _ = get_team_by_name(team_name)
+    if name:
+        return await interaction.response.send_message(f"❌ 隊伍名稱「{team_name}」已被使用！", ephemeral=True)
+    teams[team_name.strip()] = {
+        "name": team_name.strip(),
+        "leader": user_id,
+        "members": [user_id],
+        "team_points": 0,
+        "created": len(teams)
+    }
+    embed = Embed(title=f"🤝 新隊伍【{team_name.strip()}】成立！", color=0x33ccff)
+    embed.description = f"騎士 **{p['riderName']}** ({interaction.user.mention}) 成為隊長！\n隊員可用 `/team_join @{interaction.user.name}` 加入。"
+    embed.add_field(name="隊員數", value="1", inline=True)
+    embed.add_field(name="備註", value="同隊禁止PVP；戰鬥積分10%自動累計進隊", inline=False)
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="team_join", description="加入某位隊長所創建的隊伍")
+@app_commands.describe(leader="要加入隊伍的隊長")
+@check_is_dgp_channel()
+async def team_join_command(interaction: discord.Interaction, leader: Member):
+    p, err = _require_player(interaction)
+    if err:
+        return await interaction.response.send_message(err, ephemeral=True)
+    user_id = str(interaction.user.id)
+    if find_team_of_user(user_id):
+        return await interaction.response.send_message("❌ 你已經在某個隊伍中了，請先 `/team_leave` 退出！", ephemeral=True)
+    leader_id = str(leader.id)
+    if leader_id == user_id:
+        return await interaction.response.send_message("❌ 你不能加入自己的隊伍！", ephemeral=True)
+    if leader_id not in riders:
+        return await interaction.response.send_message("⚠️ 對方並非本屆參賽選手！", ephemeral=True)
+    t = find_team_of_user(leader_id)
+    if not t:
+        return await interaction.response.send_message("⚠️ 該騎士目前沒有創建任何隊伍！", ephemeral=True)
+    if t["leader"] != leader_id:
+        return await interaction.response.send_message("⚠️ 請指定『隊長本人』，而非一般隊員！", ephemeral=True)
+    t["members"].append(user_id)
+    embed = Embed(title="🤝 入隊成功！", color=0x33ccff)
+    embed.description = f"騎士 **{p['riderName']}** ({interaction.user.mention}) 加入了【{t['name']}】！"
+    embed.add_field(name="隊員數", value=f"{len(t['members'])}", inline=True)
+    embed.add_field(name="隊長", value=f"**{riders[leader_id]['riderName']}**", inline=True)
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="team_leave", description="退出你所在的隊伍（隊長可用 /team_transfer 轉讓職位後退出）")
+@check_is_dgp_channel()
+async def team_leave_command(interaction: discord.Interaction):
+    p, err = _require_player(interaction)
+    if err:
+        return await interaction.response.send_message(err, ephemeral=True)
+    user_id = str(interaction.user.id)
+    t = find_team_of_user(user_id)
+    if not t:
+        return await interaction.response.send_message("❌ 你目前不在任何隊伍中！", ephemeral=True)
+    if t["leader"] == user_id and len(t["members"]) > 1:
+        return await interaction.response.send_message(
+            "⚠️ 你是隊長且還有隊員，請先用 `/team_transfer` 轉移隊長職位，或用 `/team_disband` 解散隊伍！",
+            ephemeral=True
+        )
+    team_name = remove_player_from_team(user_id)
+    await interaction.response.send_message(f"✅ 你已退出【{team_name}】隊伍。")
+
+@bot.tree.command(name="team_info", description="查看自己或指定隊伍的詳細資訊")
+@check_is_dgp_channel()
+async def team_info_command(interaction: discord.Interaction):
+    p, err = _require_player(interaction)
+    if err:
+        return await interaction.response.send_message(err, ephemeral=True)
+    t = find_team_of_user(str(interaction.user.id))
+    if not t:
+        return await interaction.response.send_message("❌ 你目前不在任何隊伍中，可用 `/team_list` 查看全場隊伍。", ephemeral=True)
+    member_lines = []
+    for mid in t["members"]:
+        mp = riders.get(mid)
+        leader_tag = "👑" if mid == t["leader"] else ""
+        name = mp["riderName"] if mp else f"<@{mid}>"
+        hp = f"{mp['hp']}/{PLAYER_MAX_HP}" if mp else "已離場"
+        pts = mp["points"] if mp else "-"
+        member_lines.append(f"{leader_tag} **{name}**｜HP `{hp}`｜積分 `{pts}`")
+    embed = Embed(title=f"🤝 隊伍【{t['name']}】", color=0x33ccff)
+    embed.add_field(name="👑 隊長", value=f"<@{t['leader']}>", inline=True)
+    embed.add_field(name="📊 隊伍總積分", value=f"`{t.get('team_points', 0)}`", inline=True)
+    embed.add_field(name="👥 隊員", value="\n".join(member_lines), inline=False)
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="team_list", description="列出本屆大賽所有已成立的隊伍")
+@check_is_dgp_channel()
+async def team_list_command(interaction: discord.Interaction):
+    p, err = _require_player(interaction)
+    if err:
+        return await interaction.response.send_message(err, ephemeral=True)
+    if not teams:
+        return await interaction.response.send_message("📭 目前還沒有任何隊伍成立，快用 `/team_create` 創一個吧！", ephemeral=True)
+    lines = []
+    for idx, t in enumerate(sorted(teams.values(), key=lambda x: x.get("team_points", 0), reverse=True), 1):
+        leader_name = riders[t["leader"]]["riderName"] if t["leader"] in riders else "已離場"
+        lines.append(f"#{idx} **{t['name']}**｜隊長：{leader_name}｜隊員 `{len(t['members'])}`｜隊分 `{t.get('team_points', 0)}`")
+    embed = Embed(title=f"🤝 本屆參賽隊伍（{len(teams)}）", description="\n".join(lines), color=0x33ccff)
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="team_rank", description="查看各隊伍的總積分排行榜")
+@check_is_dgp_channel()
+async def team_rank_command(interaction: discord.Interaction):
+    p, err = _require_player(interaction)
+    if err:
+        return await interaction.response.send_message(err, ephemeral=True)
+    if not teams:
+        return await interaction.response.send_message("📭 目前還沒有任何隊伍成立。", ephemeral=True)
+    sorted_teams = sorted(teams.values(), key=lambda x: x.get("team_points", 0), reverse=True)
+    lines = []
+    for idx, t in enumerate(sorted_teams, 1):
+        lines.append(f"#🥇{idx} **{t['name']}**｜總積分 `{t.get('team_points', 0)}`｜隊員 `{len(t['members'])}`")
+    embed = Embed(title=f"🏆 隊伍總積分排行榜", description="\n".join(lines), color=0xffd700)
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="team_kick", description="【隊長】將不適任的隊員踢出隊伍")
+@app_commands.describe(target="要踢出的隊員")
+@check_is_dgp_channel()
+async def team_kick_command(interaction: discord.Interaction, target: Member):
+    p, err = _require_player(interaction)
+    if err:
+        return await interaction.response.send_message(err, ephemeral=True)
+    user_id = str(interaction.user.id)
+    target_id = str(target.id)
+    t = find_team_of_user(user_id)
+    if not t:
+        return await interaction.response.send_message("❌ 你不在任何隊伍中！", ephemeral=True)
+    if t["leader"] != user_id:
+        return await interaction.response.send_message("⚠️ 只有隊長才能踢出隊員！", ephemeral=True)
+    if target_id not in t["members"]:
+        return await interaction.response.send_message("⚠️ 對方不是你的隊員！", ephemeral=True)
+    if target_id == user_id:
+        return await interaction.response.send_message("⚠️ 隊長不能踢自己！", ephemeral=True)
+    t["members"].remove(target_id)
+    tname = t["name"]
+    if target_id == t["leader"]:
+        pass
+    await interaction.response.send_message(f"✅ 已將 <@{target_id}> 從【{tname}】隊伍中踢出。")
+
+@bot.tree.command(name="team_transfer", description="【隊長】將隊長職位轉移給另一位隊員")
+@app_commands.describe(target="要接任隊長的隊員")
+@check_is_dgp_channel()
+async def team_transfer_command(interaction: discord.Interaction, target: Member):
+    p, err = _require_player(interaction)
+    if err:
+        return await interaction.response.send_message(err, ephemeral=True)
+    user_id = str(interaction.user.id)
+    target_id = str(target.id)
+    t = find_team_of_user(user_id)
+    if not t:
+        return await interaction.response.send_message("❌ 你不在任何隊伍中！", ephemeral=True)
+    if t["leader"] != user_id:
+        return await interaction.response.send_message("⚠️ 只有隊長才能轉移隊長職位！", ephemeral=True)
+    if target_id not in t["members"]:
+        return await interaction.response.send_message("⚠️ 對方不是你的隊員！", ephemeral=True)
+    if target_id == user_id:
+        return await interaction.response.send_message("⚠️ 你已經是隊長了！", ephemeral=True)
+    t["leader"] = target_id
+    await interaction.response.send_message(f"✅ 隊長職位已轉移：<@{target_id}> 成為【{t['name']}】新隊長！")
+
+@bot.tree.command(name="team_disband", description="【隊長】解散自己的隊伍")
+@check_is_dgp_channel()
+async def team_disband_command(interaction: discord.Interaction):
+    p, err = _require_player(interaction)
+    if err:
+        return await interaction.response.send_message(err, ephemeral=True)
+    user_id = str(interaction.user.id)
+    t = find_team_of_user(user_id)
+    if not t:
+        return await interaction.response.send_message("❌ 你不在任何隊伍中！", ephemeral=True)
+    if t["leader"] != user_id:
+        return await interaction.response.send_message("⚠️ 只有隊長才能解散隊伍！", ephemeral=True)
+    tname = t["name"]
+    del teams[tname]
+    await interaction.response.send_message(f"✅ 隊伍【{tname}】已解散，全體隊員回復自由身。")
 
 # ====================== Keep-Alive 網頁伺服器（Replit 免休眠用） ======================
 # Replit 免費版會在沒人訪問時休眠，這個小型網頁伺服器讓 bot 隨時有回應，
