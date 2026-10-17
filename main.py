@@ -4,7 +4,60 @@ from discord.ext import tasks
 import random
 import os
 import threading
+import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
+# ======================【資料持久化（自動存檔）】======================
+# 遊戲狀態預設只存在記憶體，bot 重啟/休眠時會全部歸零。
+# 這裡加入 JSON 自動存檔：任何狀態改變都會寫進 dgp_save.json（存在工作空間，免費版也持久），
+# bot 啟動時自動讀回，讓玩家、積分、隊伍在重啟後仍保留。
+SAVE_FILE = "dgp_save.json"
+
+def save_game_state():
+    try:
+        data = {
+            "riders": riders,
+            "teams": teams,
+            "game_active": game_active,
+            "sign_up_open": sign_up_open,
+            "rest_period": rest_period,
+            "jyamato_active": jyamato_active,
+            "wait_boss_stage": wait_boss_stage,
+            "boss_active": boss_active,
+            "boss_hp": boss_hp,
+            "last_fight_boss_user": last_fight_boss_user,
+            "last_game_ranking": last_game_ranking,
+        }
+        tmp = SAVE_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, SAVE_FILE)
+    except Exception as e:
+        print(f"💾 存檔失敗: {e}")
+
+def load_game_state():
+    global game_active, sign_up_open, rest_period, jyamato_active, wait_boss_stage
+    global boss_active, boss_hp, last_fight_boss_user, last_game_ranking
+    global riders, teams
+    if not os.path.exists(SAVE_FILE):
+        return
+    try:
+        with open(SAVE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        riders = {str(k): v for k, v in data.get("riders", {}).items()}
+        teams = data.get("teams", {})
+        game_active = data.get("game_active", False)
+        sign_up_open = data.get("sign_up_open", False)
+        rest_period = data.get("rest_period", True)
+        jyamato_active = data.get("jyamato_active", False)
+        wait_boss_stage = data.get("wait_boss_stage", False)
+        boss_active = data.get("boss_active", False)
+        boss_hp = data.get("boss_hp", 0)
+        last_fight_boss_user = data.get("last_fight_boss_user", "")
+        last_game_ranking = data.get("last_game_ranking", [])
+        print(f"💾 已載入存檔：{len(riders)} 名選手、{len(teams)} 個隊伍")
+    except Exception as e:
+        print(f"📂 讀檔失敗（將以全新狀態啟動）: {e}")
 
 # ======================【全域常數設定】======================
 MAX_PLAYERS = 100
@@ -125,6 +178,7 @@ def heal_player_rest(player):
     player["hp"] = min(player["hp"] + HEAL_REST_PERIOD, PLAYER_MAX_HP)
 
 async def check_player_death(user_id: str, guild: discord.Guild):
+    save_game_state()
     if user_id in riders and riders[user_id]["hp"] <= 0:
         p_data = riders.pop(user_id)
         remove_player_from_team(user_id)
@@ -153,6 +207,7 @@ def check_is_dgp_channel():
     return app_commands.check(predicate)
 
 async def check_and_trigger_mission_clear(user_id: str, member: Member):
+    save_game_state()
     p = riders.get(user_id)
     if not p or not p.get("active_mission"):
         return
@@ -278,6 +333,7 @@ async def auto_final_process():
     riders.clear()
     waiting_info.clear()
     teams.clear()
+    save_game_state()
 
 @tasks.loop(seconds=AUTO_ELIMINATE_INTERVAL)
 async def auto_eliminate():
@@ -299,6 +355,7 @@ bot = DGPBot()
 
 @bot.event
 async def on_ready():
+    load_game_state()
     print(f"✅ DGP 欲望大賽 上線｜登入 {bot.user}")
     try:
         synced = await bot.tree.sync()
@@ -468,6 +525,7 @@ async def entry_command(interaction: discord.Interaction, rider_name: str, wish:
     embed.add_field(name="目前參賽人數", value=f"{len(riders)}/{MAX_PLAYERS}", inline=True)
     embed.description = "請靜待管理員使用 `/start` 開啟遊戲大賽！"
     await interaction.response.send_message(embed=embed)
+    save_game_state()
 
 @bot.tree.command(name="health", description="查看自身當前的血量與進行中的任務")
 @check_is_dgp_channel()
@@ -501,6 +559,7 @@ async def name_change_command(interaction: discord.Interaction, new_name: str):
     old_name = p["riderName"]
     p["riderName"] = new_name
     await interaction.response.send_message(f"✅ 名稱變更成功：**{old_name}** ➔ **{new_name}**")
+    save_game_state()
 
 @bot.tree.command(name="rank", description="查看當前參賽名單與積分排行")
 @check_is_dgp_channel()
@@ -528,6 +587,7 @@ async def henshin_command(interaction: discord.Interaction):
     if user_id not in riders:
         return await interaction.response.send_message("❌ 你並非參賽選手！", ephemeral=True)
     riders[user_id]["isHenshin"] = True
+    save_game_state()
     embed = Embed(title="🦊 ENTRY RAISE !", color=0x00bfff)
     embed.description = f"騎士 **{riders[user_id]['riderName']}** 完成基礎變身，準備迎戰！"
     await interaction.response.send_message("變身成功！")
@@ -554,6 +614,7 @@ async def gacha_command(interaction: discord.Interaction):
     p["gacha_count"] += 1
     buckle = get_random_buckle()
     p["buckles"].append(buckle)
+    save_game_state()
     if buckle in RARE_BUCKLES:
         embed = Embed(title="🌟 HIGHLIGHT! 極度奢華！", color=0xffd700)
         embed.description = f"{interaction.user.mention} 幸運爆棚！抽中傳奇稀有帶扣：**{buckle.upper()}**！ {cost_msg}"
@@ -608,6 +669,7 @@ async def set_buckle_command(interaction: discord.Interaction, buckle_name: str)
     p["hp"] = min(p["hp"] + HEAL_BY_SET_BUCKLE, PLAYER_MAX_HP)
     p["equipBuckle"] = matched_buckle
     await interaction.response.send_message(f"成功插拔帶扣！已退出Dual‑On(若原先開啟)", ephemeral=True)
+    save_game_state()
     if matched_buckle.lower() == "bujin sword":
         embed = Embed(title="⚔️ SET AVENGE ! BUJIN SWORD !", color=0xff4500)
         embed.description = f"{interaction.user.mention} 裝備了【武神之刃】！黑闇斬擊蓄勢待發！(傷害 +100)"
@@ -647,6 +709,7 @@ async def dual_on_command(interaction: discord.Interaction, buckle1: str, buckle
     p["isHenshin"] = True
     p["hp"] = min(p["hp"] + HEAL_BY_SET_BUCKLE, PLAYER_MAX_HP)
     await interaction.response.send_message("🔥 DUAL‑ON 雙重武裝！變身完成", ephemeral=True)
+    save_game_state()
     embed = Embed(title="🔥 DUAL‑ON！GET READY FOR TWO POWER！", color=0xff8822)
     embed.description = (
         f"{interaction.user.mention} 驅動器雙槽全部装填！\n"
@@ -671,6 +734,7 @@ async def dual_off_command(interaction: discord.Interaction):
     p["slot_left"] = None
     p["slot_right"] = None
     await interaction.response.send_message("✅ 已關閉Dual‑On雙重武裝，回到Entry Form狀態，請使用 `/set_buckle`裝備單一扣具", ephemeral=True)
+    save_game_state()
 
 @bot.tree.command(name="give_buckle", description="將你的帶扣割愛轉贈給其他參賽騎士")
 @app_commands.describe(buckle_name="扣具名/簡稱", target_player="接收的騎士")
@@ -694,6 +758,7 @@ async def give_buckle_command(interaction: discord.Interaction, buckle_name: str
     embed.description = f"騎士 **{sender['riderName']}** 將帶扣 **{matched_buckle}** 轉贈交給了 **{receiver['riderName']}**！"
     await interaction.response.send_message("贈送成功！", ephemeral=True)
     await send_global_embed(embed)
+    save_game_state()
 
 @bot.tree.command(name="fight", description="迎戰當前場上的邪魔徒或 BOSS（需先完成變身）")
 @check_is_dgp_channel()
@@ -855,6 +920,7 @@ async def mission_command(interaction: discord.Interaction):
         f"你現在可以去戰場安心使用 `/fight` 戰鬥了。每當你造成傷害或擊殺時，系統將在後台自動計算進度，**達標時機器人會自動在此發放完成廣播！**"
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)
+    save_game_state()
 
 @bot.tree.command(name="battle", description="騎士內戰PVP，與其他參賽者戰鬥，支援Dual‑On雙扣加成與雙重被動")
 @app_commands.describe(target="要挑戰的參賽者")
@@ -953,6 +1019,7 @@ async def battle_command(interaction: discord.Interaction, target: Member):
 {defender['riderName']} HP：{defender['hp']}｜積分 -{lose_point}
 """
     await interaction.response.send_message(text)
+    save_game_state()
 
 # ======================【模組3：管理員｜大賽控制指令】======================
 @bot.tree.command(name="game_stop", description="【管理員】強制暫停DGP大賽，保留所有玩家資料")
@@ -972,6 +1039,7 @@ async def game_stop_command(interaction: discord.Interaction):
     embed.description = "對局已掛起，全部玩家資料保留。\n使用 `/game_resume` 繼續遊戲。"
     await send_global_embed(embed)
     await interaction.response.send_message("✅ 已執行強制暫停", ephemeral=True)
+    save_game_state()
 
 @bot.tree.command(name="game_resume", description="【管理員】恢復被暫停的DGP大賽")
 @check_is_dgp_channel()
@@ -988,6 +1056,7 @@ async def game_resume_command(interaction: discord.Interaction):
     embed.description = "從暫停狀態繼續DGP大賽。"
     await send_global_embed(embed)
     await interaction.response.send_message("✅ 已恢復遊戲", ephemeral=True)
+    save_game_state()
 
 @bot.tree.command(name="export_last_rank", description="【管理員】匯出上一局的排名紀錄")
 @check_is_dgp_channel()
@@ -1026,6 +1095,7 @@ async def ready_command(interaction: discord.Interaction):
     embed.description = "請各位有意願改寫世界的準假面騎士們，使用斜線指令 `/entry` 登記姓名與願望！\n當主辦方準備就緒，將以 `/start` 封鎖通道並鳴槍開戰！"
     await interaction.response.send_message("大賽系統已重置，報名廣播已發出。")
     await send_global_embed(embed)
+    save_game_state()
 
 @bot.tree.command(name="start", description="【主辦方專用】截止選手報名，欲望大賽正式開戰")
 @check_is_dgp_channel()
@@ -1054,6 +1124,7 @@ async def start_command(interaction: discord.Interaction):
     embed.description = "報名通道已永久關閉，不接受中途加入！\n目前大賽處於【第一輪休息時段】，全員血量充沛。請主辦方下達 `/jyamato` 指令引渡邪魔徒進場！"
     await interaction.response.send_message("大賽已正式激活！")
     await send_global_embed(embed)
+    save_game_state()
 
 @bot.tree.command(name="jyamato", description="【主辦方專用】驅使一般邪魔徒軍團入侵戰場")
 @check_is_dgp_channel()
@@ -1075,6 +1146,7 @@ async def jyamato_command(interaction: discord.Interaction):
     embed.description = f"偵測到大量 **{enemy['name']}** 的蹤跡！\n請全體騎士立刻完成變身，並以 `/fight` 捍衛城市！"
     await interaction.response.send_message("邪魔徒已投放。")
     await send_global_embed(embed)
+    save_game_state()
 
 @bot.tree.command(name="end_jyamato", description="【主辦方專用】終止小兵攻勢，令戰場進入等待 BOSS 降臨階段")
 @check_is_dgp_channel()
@@ -1093,6 +1165,7 @@ async def end_jyamato_command(interaction: discord.Interaction):
     embed.description = "戰場已陷入死一般的寂靜...【等待 BOSS 戰略指令中】。\n請主辦方於適當時機使用 `/boss` 指令召喚最終頭目！"
     await interaction.response.send_message("已結束小兵突擊階段。")
     await send_global_embed(embed)
+    save_game_state()
 
 @bot.tree.command(name="boss", description="【主辦方專用】召喚最終 BOSS 邪魔徒強行降臨")
 @check_is_dgp_channel()
@@ -1119,6 +1192,7 @@ async def boss_command(interaction: discord.Interaction):
     )
     await interaction.response.send_message("BOSS 指令已下達。")
     await send_global_embed(embed)
+    save_game_state()
 
 @bot.tree.command(name="elim", description="【主辦方專用】手動將指定違規 or 不合格的選手剝奪資格淘汰")
 @check_is_dgp_channel()
@@ -1142,6 +1216,7 @@ async def elim_command(interaction: discord.Interaction, target_player: Member):
     embed.description = f"管理員行使了主辦方特權，騎士 **{target_data['riderName']}** 被強制清除淘汰。\n剩餘人數：{len(riders)}/{MAX_PLAYERS}"
     await interaction.response.send_message(f"已淘汰該選手。")
     await send_global_embed(embed)
+    save_game_state()
     if len(riders) <= 1 and game_active:
         await auto_final_process()
 
@@ -1183,6 +1258,7 @@ async def team_create_command(interaction: discord.Interaction, team_name: str):
     embed.add_field(name="隊員數", value="1", inline=True)
     embed.add_field(name="備註", value="同隊禁止PVP；戰鬥積分10%自動累計進隊", inline=False)
     await interaction.response.send_message(embed=embed)
+    save_game_state()
 
 @bot.tree.command(name="team_join", description="加入某位隊長所創建的隊伍")
 @app_commands.describe(leader="要加入隊伍的隊長")
@@ -1210,6 +1286,7 @@ async def team_join_command(interaction: discord.Interaction, leader: Member):
     embed.add_field(name="隊員數", value=f"{len(t['members'])}", inline=True)
     embed.add_field(name="隊長", value=f"**{riders[leader_id]['riderName']}**", inline=True)
     await interaction.response.send_message(embed=embed)
+    save_game_state()
 
 @bot.tree.command(name="team_leave", description="退出你所在的隊伍（隊長可用 /team_transfer 轉讓職位後退出）")
 @check_is_dgp_channel()
@@ -1228,6 +1305,7 @@ async def team_leave_command(interaction: discord.Interaction):
         )
     team_name = remove_player_from_team(user_id)
     await interaction.response.send_message(f"✅ 你已退出【{team_name}】隊伍。")
+    save_game_state()
 
 @bot.tree.command(name="team_info", description="查看自己或指定隊伍的詳細資訊")
 @check_is_dgp_channel()
@@ -1305,6 +1383,7 @@ async def team_kick_command(interaction: discord.Interaction, target: Member):
     if target_id == t["leader"]:
         pass
     await interaction.response.send_message(f"✅ 已將 <@{target_id}> 從【{tname}】隊伍中踢出。")
+    save_game_state()
 
 @bot.tree.command(name="team_transfer", description="【隊長】將隊長職位轉移給另一位隊員")
 @app_commands.describe(target="要接任隊長的隊員")
@@ -1326,6 +1405,7 @@ async def team_transfer_command(interaction: discord.Interaction, target: Member
         return await interaction.response.send_message("⚠️ 你已經是隊長了！", ephemeral=True)
     t["leader"] = target_id
     await interaction.response.send_message(f"✅ 隊長職位已轉移：<@{target_id}> 成為【{t['name']}】新隊長！")
+    save_game_state()
 
 @bot.tree.command(name="team_disband", description="【隊長】解散自己的隊伍")
 @check_is_dgp_channel()
@@ -1342,6 +1422,7 @@ async def team_disband_command(interaction: discord.Interaction):
     tname = t["name"]
     del teams[tname]
     await interaction.response.send_message(f"✅ 隊伍【{tname}】已解散，全體隊員回復自由身。")
+    save_game_state()
 
 # ====================== Keep-Alive 網頁伺服器（Replit 免休眠用） ======================
 # Replit 免費版會在沒人訪問時休眠，這個小型網頁伺服器讓 bot 隨時有回應，
